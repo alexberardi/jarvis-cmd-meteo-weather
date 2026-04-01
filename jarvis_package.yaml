@@ -1,0 +1,30 @@
+name: "get_weather"
+display_name: "Weather (Open-Meteo)"
+description: "Current weather conditions and forecasts up to 16 days via Open-Meteo. Free, no API key required. Supports city lookup, IP-based location fallback, and configurable units."
+version: "1.0.0"
+min_jarvis_version: "0.9.0"
+license: "MIT"
+author:
+  github: "alexberardi"
+categories: ["information", "weather"]
+platforms: ["darwin", "linux"]
+keywords: ["weather", "forecast", "temperature", "rain", "snow", "wind", "conditions", "open-meteo"]
+
+packages:
+  - name: requests
+
+secrets:
+  - key: OPENMETEO_UNITS
+    scope: integration
+    value_type: string
+    description: "Unit system: imperial (°F, mph) or metric (°C, km/h). Default: imperial."
+    is_sensitive: false
+    required: false
+    friendly_name: "Units"
+  - key: OPENMETEO_LOCATION
+    scope: node
+    value_type: string
+    description: "Default location as City,State,Country (e.g., Miami,FL,US). Falls back to IP geolocation if omitted."
+    is_sensitive: false
+    required: false
+    friendly_name: "Default Location"
