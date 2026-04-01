@@ -3,7 +3,7 @@
 import datetime
 from typing import Any
 
-import requests
+import httpx
 
 try:
     from jarvis_log_client import JarvisLogger
@@ -120,7 +120,7 @@ def _wmo_description(code: int) -> str:
 def _get_current_location() -> str | None:
     """Fall back to IP-based geolocation."""
     try:
-        resp = requests.get("http://ip-api.com/json/", timeout=5)
+        resp = httpx.get("http://ip-api.com/json/", timeout=5)
         if resp.status_code == 200:
             data = resp.json()
             city = data.get("city")
@@ -131,14 +131,14 @@ def _get_current_location() -> str | None:
             if city and country:
                 return f"{city},{country}"
             return city
-    except requests.exceptions.RequestException as e:
+    except httpx.HTTPError as e:
         logger.error("Error getting location", error=str(e))
     return None
 
 
 def _geocode(city: str) -> tuple[float, float, str]:
     """Resolve city name to (lat, lon, display_name) via Open-Meteo geocoding."""
-    resp = requests.get(
+    resp = httpx.get(
         _GEOCODING_URL, params={"name": city, "count": 1, "language": "en"}, timeout=10
     )
     resp.raise_for_status()
@@ -146,7 +146,7 @@ def _geocode(city: str) -> tuple[float, float, str]:
     # Retry with just the first part if comma-separated (e.g. "Brick, NJ, US" -> "Brick")
     if not results and "," in city:
         city_only = city.split(",")[0].strip()
-        resp = requests.get(
+        resp = httpx.get(
             _GEOCODING_URL, params={"name": city_only, "count": 1, "language": "en"}, timeout=10
         )
         resp.raise_for_status()
@@ -385,10 +385,10 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
         )
 
         try:
-            resp = requests.get(_FORECAST_URL, params=params, timeout=10)
+            resp = httpx.get(_FORECAST_URL, params=params, timeout=10)
             resp.raise_for_status()
             data = resp.json()
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             logger.error("Open-Meteo API error", error=str(e))
             return CommandResponse.error_response(
                 error_details=f"Weather API error: {e}",
