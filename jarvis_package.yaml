@@ -10,6 +10,9 @@ categories: ["information", "weather"]
 platforms: ["darwin", "linux"]
 keywords: ["weather", "forecast", "temperature", "rain", "snow", "wind", "conditions", "open-meteo"]
 
+packages:
+  - name: httpx
+
 secrets:
   - key: OPENMETEO_UNITS
     scope: integration
