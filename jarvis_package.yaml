@@ -10,6 +10,11 @@ categories: ["information", "weather"]
 platforms: ["darwin", "linux"]
 keywords: ["weather", "forecast", "temperature", "rain", "snow", "wind", "conditions", "open-meteo"]
 
+components:
+  - type: command
+    name: get_weather
+    path: commands/get_weather/command.py
+
 packages:
   - name: httpx
 
