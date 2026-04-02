@@ -169,7 +169,7 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
 
     @property
     def command_name(self) -> str:
-        return "get_weather"
+        return "get_weather_meteo"
 
     @property
     def keywords(self) -> list[str]:

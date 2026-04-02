@@ -1,4 +1,4 @@
-name: "get_weather"
+name: "get_weather_meteo"
 display_name: "Weather (Open-Meteo)"
 description: "Current weather conditions and forecasts up to 16 days via Open-Meteo. Free, no API key required. Supports city lookup, IP-based location fallback, and configurable units."
 version: "1.0.0"
@@ -12,7 +12,7 @@ keywords: ["weather", "forecast", "temperature", "rain", "snow", "wind", "condit
 
 components:
   - type: command
-    name: get_weather
+    name: get_weather_meteo
     path: commands/get_weather/command.py
 
 packages:
