@@ -187,7 +187,7 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
         return [
             JarvisParameter(
                 "city", "string", required=False, default=None,
-                description="City name. Omit for default location.",
+                description="City name ONLY if the user explicitly names a city. Do NOT infer or fill in a city from context/memory — omit this parameter to use the user's configured default location.",
             ),
             JarvisParameter(
                 "resolved_datetimes", "array<datetime>", required=True,
@@ -234,6 +234,7 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
     def critical_rules(self) -> list[str]:
         return [
             "city param for location (NOT 'query'). This tool has NO 'query' parameter.",
+            "NEVER infer or fill in the city param from user memories or context. Only pass city if the user explicitly says a city name in their request. Omitting city uses their configured default location.",
             "Not for time queries — use get_current_time.",
         ]
 
