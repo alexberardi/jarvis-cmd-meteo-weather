@@ -313,6 +313,21 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
         if city and city.lower() in ("default", "none", "null", "n/a", ""):
             city = None
 
+        # Guard against the LLM inferring a city from user memories when
+        # the user didn't actually name one. If city was supplied but no
+        # word from it appears in the original voice command, drop it and
+        # use the configured default instead.
+        if city and request_info.voice_command:
+            city_words = {w.lower() for w in city.replace(",", " ").split()}
+            command_lower = request_info.voice_command.lower()
+            if not any(w in command_lower for w in city_words if len(w) > 2):
+                logger.debug(
+                    "Ignoring LLM-inferred city (not in voice command)",
+                    inferred=city,
+                    voice_command=request_info.voice_command,
+                )
+                city = None
+
         resolved_datetimes = kwargs.get("resolved_datetimes")
         if not resolved_datetimes:
             return CommandResponse.error_response(
@@ -324,7 +339,7 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
 
         # Resolve location
         if not city:
-            city = self._storage.get_secret("OPENMETEO_LOCATION")
+            city = self._storage.get_secret("OPENMETEO_LOCATION", scope="node")
         if not city:
             city = _get_current_location()
         if not city:
