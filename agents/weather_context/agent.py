@@ -25,7 +25,7 @@ from jarvis_command_sdk import AgentSchedule, Alert, IJarvisAgent, IJarvisSecret
 
 logger = JarvisLogger(service="jarvis-node")
 
-REFRESH_INTERVAL_SECONDS = 1800  # 30 minutes
+REFRESH_INTERVAL_SECONDS = 60  # TEMP: 60s for testing (prod: 1800)
 CURRENT_TTL_HOURS = 3
 FORECAST_TTL_HOURS = 12
 
