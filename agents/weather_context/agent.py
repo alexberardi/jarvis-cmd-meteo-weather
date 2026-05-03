@@ -25,7 +25,7 @@ from jarvis_command_sdk import AgentSchedule, Alert, IJarvisAgent, IJarvisSecret
 
 logger = JarvisLogger(service="jarvis-node")
 
-REFRESH_INTERVAL_SECONDS = 60  # TEMP: 60s for testing (prod: 1800)
+REFRESH_INTERVAL_SECONDS = 1800  # 30 minutes
 CURRENT_TTL_HOURS = 3
 FORECAST_TTL_HOURS = 12
 
@@ -70,10 +70,14 @@ class WeatherContextAgent(IJarvisAgent):
     async def run(self) -> None:
         """Fetch weather and inject into CC memory."""
         try:
+            # The command installs under its package name (get_weather_meteo)
             try:
-                from commands.get_weather.command import OpenMeteoWeatherCommand
+                from commands.get_weather_meteo.command import OpenMeteoWeatherCommand
             except ImportError:
-                from commands.custom_commands.get_weather.command import OpenMeteoWeatherCommand
+                try:
+                    from commands.get_weather.command import OpenMeteoWeatherCommand
+                except ImportError:
+                    from commands.custom_commands.get_weather_meteo.command import OpenMeteoWeatherCommand
 
             from jarvis_command_sdk import RequestInformation
 
