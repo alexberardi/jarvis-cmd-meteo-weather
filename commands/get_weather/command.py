@@ -224,7 +224,7 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
             JarvisSecret(
                 "OPENMETEO_LOCATION",
                 "City,State,Country (e.g., Miami,FL,US). Falls back to IP geolocation.",
-                "node", "string",
+                "integration", "string",
                 is_sensitive=False, required=False,
                 friendly_name="Default Location",
             ),
@@ -339,7 +339,7 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
 
         # Resolve location
         if not city:
-            city = self._storage.get_secret("OPENMETEO_LOCATION", scope="node")
+            city = self._storage.get_secret("OPENMETEO_LOCATION")
         if not city:
             city = _get_current_location()
         if not city:

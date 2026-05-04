@@ -30,7 +30,7 @@ secrets:
     required: false
     friendly_name: "Units"
   - key: OPENMETEO_LOCATION
-    scope: node
+    scope: integration
     value_type: string
     description: "Default location as City,State,Country (e.g., Miami,FL,US). Falls back to IP geolocation if omitted."
     is_sensitive: false
