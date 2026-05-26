@@ -117,6 +117,74 @@ def _wmo_description(code: int) -> str:
     return _WMO_CODES.get(code, f"unknown ({code})")
 
 
+def _summarize_next_hour_precip(
+    times: list[str],
+    precip: list[float | None],
+    precip_prob: list[int | None],
+    precip_unit: str,
+) -> str:
+    """Compact natural-language summary of the next ~hour of precipitation.
+
+    Returns "" if there's no minutely data (e.g. region not covered).
+    """
+    if not times or not precip:
+        return ""
+    # Limit to the first 4 entries (15-min resolution × 4 = next 60 min)
+    limit = min(4, len(precip))
+    window_precip = precip[:limit]
+    window_prob = (precip_prob or [])[:limit]
+    start_idx: int | None = None
+    for i, p in enumerate(window_precip):
+        if p is not None and p > 0:
+            start_idx = i
+            break
+    if start_idx is None:
+        peak_prob = max((p for p in window_prob if p is not None), default=0)
+        if peak_prob >= 20:
+            return f"No precipitation in the next hour (peak chance {peak_prob}%)."
+        return "No precipitation in the next hour."
+    intensity = window_precip[start_idx] or 0.0
+    minutes = start_idx * 15
+    if minutes == 0:
+        return f"Precipitation now (~{intensity:.2f} {precip_unit} per 15 min)."
+    return (
+        f"Precipitation expected in ~{minutes} min "
+        f"(~{intensity:.2f} {precip_unit} per 15 min)."
+    )
+
+
+def _summarize_hourly(
+    times: list[str],
+    temps: list[float | None],
+    precip_prob: list[int | None],
+    wmo_codes: list[int | None],
+    unit_symbol: str,
+    hours: int = 12,
+) -> list[dict[str, Any]]:
+    """Compact next-N-hours forecast — small enough to feed an LLM cheaply."""
+    if not times:
+        return []
+    limit = min(hours, len(times))
+    out: list[dict[str, Any]] = []
+    for i in range(limit):
+        try:
+            dt = datetime.datetime.fromisoformat(times[i])
+            label = dt.strftime("%-I%p").lower()
+        except (ValueError, TypeError):
+            label = times[i]
+        temp = temps[i] if i < len(temps) else None
+        prob = precip_prob[i] if i < len(precip_prob) else None
+        code = wmo_codes[i] if i < len(wmo_codes) else None
+        out.append({
+            "time": label,
+            "temp": round(temp) if temp is not None else None,
+            "unit": unit_symbol,
+            "precip_chance": prob or 0,
+            "description": _wmo_description(code) if code is not None else "unknown",
+        })
+    return out
+
+
 def _get_current_location() -> str | None:
     """Fall back to IP-based geolocation."""
     try:
@@ -180,7 +248,15 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
 
     @property
     def description(self) -> str:
-        return "Weather conditions or forecast (up to 16 days). Use for ALL weather queries. For time queries use get_current_time."
+        return (
+            "Weather: current conditions, hourly forecast (next 12 hours), "
+            "minutely precipitation (next hour, when available), and daily "
+            "forecast (up to 16 days). For sub-day questions ('rain in the next "
+            "hour', 'this afternoon', 'tonight', 'soon'), pass "
+            "resolved_datetimes=['today'] — the response already contains "
+            "next_hour_precip and next_12_hours fields. For time queries use "
+            "get_current_time."
+        )
 
     @property
     def parameters(self) -> list[IJarvisParameter]:
@@ -191,7 +267,12 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
             ),
             JarvisParameter(
                 "resolved_datetimes", "array<datetime>", required=True,
-                description="Date keys: 'today','tomorrow','this_weekend', etc. (max 16 days). Default 'today'.",
+                description=(
+                    "Day-level date keys ONLY: 'today','tomorrow','this_weekend', etc. "
+                    "(max 16 days). For sub-day questions ('next hour', 'this afternoon', "
+                    "'tonight', 'soon'), pass ['today'] — the response carries hourly + "
+                    "minutely data. Default 'today'."
+                ),
             ),
         ]
 
@@ -235,6 +316,8 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
         return [
             "city param for location (NOT 'query'). This tool has NO 'query' parameter.",
             "NEVER infer or fill in the city param from user memories or context. Only pass city if the user explicitly says a city name in their request. Omitting city uses their configured default location.",
+            "For sub-day questions (next hour, this afternoon, tonight, soon, in a bit), pass resolved_datetimes=['today']. The response includes next_hour_precip and next_12_hours — read those fields instead of inventing date keys.",
+            "NEVER invent date keys like 'next_hour', 'next_15_minutes', 'in_3_hours'. Use canonical keys only: today, tomorrow, this_weekend, etc.",
             "Not for time queries — use get_current_time.",
         ]
 
@@ -389,11 +472,20 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
         if use_fahrenheit:
             params["temperature_unit"] = "fahrenheit"
             params["wind_speed_unit"] = "mph"
+            params["precipitation_unit"] = "inch"
+
+        precip_unit_label = "in" if use_fahrenheit else "mm"
 
         if is_current:
             params["current"] = (
                 "temperature_2m,relative_humidity_2m,apparent_temperature,"
                 "weather_code,wind_speed_10m"
+            )
+            # Short-term blocks for "is it going to rain", "next hour" etc.
+            # minutely_15 is Central-Europe/NA only — handled defensively below.
+            params["minutely_15"] = "precipitation,precipitation_probability"
+            params["hourly"] = (
+                "temperature_2m,precipitation_probability,weather_code,wind_speed_10m"
             )
         params["daily"] = (
             "temperature_2m_max,temperature_2m_min,"
@@ -421,6 +513,30 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
             unit_symbol = "°F" if use_fahrenheit else "°C"
             wind_unit = "mph" if use_fahrenheit else "km/h"
 
+            m15 = data.get("minutely_15") or {}
+            next_hour_precip = _summarize_next_hour_precip(
+                m15.get("time", []),
+                m15.get("precipitation", []),
+                m15.get("precipitation_probability", []),
+                precip_unit_label,
+            )
+
+            hourly = data.get("hourly") or {}
+            next_hours = _summarize_hourly(
+                hourly.get("time", []),
+                hourly.get("temperature_2m", []),
+                hourly.get("precipitation_probability", []),
+                hourly.get("weather_code", []),
+                unit_symbol,
+                hours=12,
+            )
+
+            # Note: no `message` field here — command-center's fast-path
+            # formatter (conversation_handler.py) keys off `message` to skip
+            # the LLM call, which would emit a canned current-weather
+            # narration and ignore questions like "is it going to rain in
+            # the next hour?". Returning structured data only forces the
+            # LLM path so it can answer the user's actual question.
             return CommandResponse.success_response(
                 context_data={
                     "city": display_name,
@@ -429,13 +545,12 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
                     "description": description,
                     "humidity": humidity,
                     "wind_speed": wind,
+                    "wind_unit": wind_unit,
+                    "unit_symbol": unit_symbol,
                     "unit_system": unit_system,
                     "weather_type": "current",
-                    "message": (
-                        f"Currently {round(temp)}{unit_symbol} and {description} in {display_name}. "
-                        f"Feels like {round(feels_like)}{unit_symbol}. "
-                        f"Humidity {humidity}%, wind {round(wind)} {wind_unit}."
-                    ),
+                    "next_hour_precip": next_hour_precip,
+                    "next_12_hours": next_hours,
                 },
             )
 
