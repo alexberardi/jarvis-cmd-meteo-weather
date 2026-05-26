@@ -31,12 +31,14 @@ from jarvis_command_sdk import (
     CommandAntipattern,
     CommandExample,
     CommandResponse,
+    FastPathPattern,
     IJarvisCommand,
     IJarvisParameter,
     IJarvisSecret,
     JarvisParameter,
     JarvisSecret,
     JarvisStorage,
+    PreRouteResult,
     RequestInformation,
 )
 
@@ -389,6 +391,77 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
             for vc, params, primary in items
         ]
 
+    # ------------------------------------------------------------------
+    # Fast-path patterns — bypass the LLM for the common day-level
+    # current-weather queries. Sub-day phrasings ('next hour', 'tonight')
+    # still go through the LLM because the date-key resolution is more
+    # involved; the fast path here only claims the simple shapes.
+    # ------------------------------------------------------------------
+    @property
+    def fast_path_patterns(self) -> list[FastPathPattern]:
+        return [
+            # "weather in X" / "what's the weather in X" / "forecast in X"
+            FastPathPattern(
+                id="get_weather_meteo.in_location",
+                description="Bypass LLM for 'weather/forecast/temperature in <city>'",
+                example="what's the weather in San Francisco",
+                regex=r"\b(?:what(?:'?s|\s+is)?\s+the\s+)?(?:weather|forecast|temperature|temp)\s+in\s+(?P<location>[a-zA-Z][a-zA-Z\s]+?)\s*[?.!]*$",
+                handler="_fp_weather_in_location",
+            ),
+            # "what's the weather" / "weather today" / "is it raining" — current location, today
+            FastPathPattern(
+                id="get_weather_meteo.current",
+                description="Bypass LLM for current local weather ('what's the weather', 'is it raining')",
+                example="what's the weather",
+                regex=r"^\s*(?:what(?:'?s|\s+is)?\s+the\s+(?:weather|forecast|temperature|temp)(?:\s+(?:today|like|outside))?|weather(?:\s+today)?|is\s+it\s+rain(?:ing)?(?:\s+today)?|is\s+it\s+(?:hot|cold|sunny|cloudy|snowing)(?:\s+outside)?)\s*[?.!]*$",
+                handler="_fp_weather_current",
+            ),
+            # "weather tomorrow" / "what's the weather tomorrow"
+            FastPathPattern(
+                id="get_weather_meteo.tomorrow",
+                description="Bypass LLM for tomorrow's local weather",
+                example="what's the weather tomorrow",
+                regex=r"^\s*(?:what(?:'?s|\s+is)?\s+the\s+)?(?:weather|forecast|temperature|temp)\s+tomorrow\s*[?.!]*$",
+                handler="_fp_weather_tomorrow",
+            ),
+        ]
+
+    # Resolve a day-offset into the ISO datetime string the command's run()
+    # expects. The runtime's date helper only understands ISO timestamps;
+    # named keys like "today" silently return None. CC normalises these
+    # for LLM-routed calls via date_context — the fast path has to do it
+    # itself.
+    @staticmethod
+    def _iso_date_for_offset(offset: int) -> str:
+        try:
+            from utils.date_util import get_example_date_with_offset
+            return get_example_date_with_offset(offset)
+        except ImportError:
+            from datetime import datetime, timedelta, timezone
+            target = (datetime.now(timezone.utc) + timedelta(days=offset)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            return target.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _fp_weather_in_location(self, match, voice_command: str) -> PreRouteResult | None:
+        location = match.group("location").strip()
+        if not location:
+            return None
+        return PreRouteResult(arguments={
+            "city": location,
+            "resolved_datetimes": [self._iso_date_for_offset(0)],
+        })
+
+    def _fp_weather_current(self, match, voice_command: str) -> PreRouteResult | None:
+        return PreRouteResult(arguments={
+            "resolved_datetimes": [self._iso_date_for_offset(0)],
+        })
+
+    def _fp_weather_tomorrow(self, match, voice_command: str) -> PreRouteResult | None:
+        return PreRouteResult(arguments={
+            "resolved_datetimes": [self._iso_date_for_offset(1)],
+        })
+
     # -- Execution --
 
     def run(self, request_info: RequestInformation, **kwargs: Any) -> CommandResponse:
@@ -531,28 +604,45 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
                 hours=12,
             )
 
-            # Note: no `message` field here — command-center's fast-path
-            # formatter (conversation_handler.py) keys off `message` to skip
-            # the LLM call, which would emit a canned current-weather
-            # narration and ignore questions like "is it going to rain in
-            # the next hour?". Returning structured data only forces the
-            # LLM path so it can answer the user's actual question.
-            return CommandResponse.success_response(
-                context_data={
-                    "city": display_name,
-                    "temperature": temp,
-                    "feels_like": feels_like,
-                    "description": description,
-                    "humidity": humidity,
-                    "wind_speed": wind,
-                    "wind_unit": wind_unit,
-                    "unit_symbol": unit_symbol,
-                    "unit_system": unit_system,
-                    "weather_type": "current",
-                    "next_hour_precip": next_hour_precip,
-                    "next_12_hours": next_hours,
-                },
-            )
+            # Note: no `message` field here for the LLM path —
+            # command-center's fast-path formatter (conversation_handler.py)
+            # keys off `message` to skip the LLM call, which would emit a
+            # canned current-weather narration and ignore questions like
+            # "is it going to rain in the next hour?". Returning structured
+            # data only forces the LLM path so it can answer the user's
+            # actual question.
+            #
+            # Exception: when the *node-side* fast path called us
+            # (is_pre_routed=True), there's no LLM downstream at all and
+            # we must pre-compose the spoken response. The pre-route regex
+            # only matches the simple shapes ("what's the weather",
+            # "weather in <city>") where a canned narration is the right
+            # answer; sub-day questions fall through to the LLM path.
+            context_data: dict[str, Any] = {
+                "city": display_name,
+                "temperature": temp,
+                "feels_like": feels_like,
+                "description": description,
+                "humidity": humidity,
+                "wind_speed": wind,
+                "wind_unit": wind_unit,
+                "unit_symbol": unit_symbol,
+                "unit_system": unit_system,
+                "weather_type": "current",
+                "next_hour_precip": next_hour_precip,
+                "next_12_hours": next_hours,
+            }
+            if request_info.is_pre_routed:
+                temp_int = round(temp)
+                # Drop the country code on multi-segment names ("San Francisco,
+                # California, US" -> "San Francisco") so the spoken response
+                # stays natural.
+                display_short = display_name.split(",")[0].strip()
+                context_data["message"] = (
+                    f"It's {temp_int}{unit_symbol} and {description.lower()} "
+                    f"in {display_short}."
+                )
+            return CommandResponse.success_response(context_data=context_data)
 
         # Forecast
         daily = data.get("daily", {})
