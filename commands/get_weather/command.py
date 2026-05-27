@@ -634,14 +634,22 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
             }
             if request_info.is_pre_routed:
                 temp_int = round(temp)
-                # Drop the country code on multi-segment names ("San Francisco,
-                # California, US" -> "San Francisco") so the spoken response
-                # stays natural.
-                display_short = display_name.split(",")[0].strip()
-                context_data["message"] = (
-                    f"It's {temp_int}{unit_symbol} and {description.lower()} "
-                    f"in {display_short}."
-                )
+                # Keep it terse — drop the city when the request didn't name
+                # one (the user already knows their default location). Cuts
+                # ~1-2s of TTS playback. When a city was named, include only
+                # the first segment ("San Francisco, California, US" → "San
+                # Francisco") so it reads naturally.
+                user_specified_city = bool(kwargs.get("city"))
+                if user_specified_city:
+                    display_short = display_name.split(",")[0].strip()
+                    context_data["message"] = (
+                        f"It's {temp_int} and {description.lower()} "
+                        f"in {display_short}."
+                    )
+                else:
+                    context_data["message"] = (
+                        f"It's {temp_int} and {description.lower()}."
+                    )
             return CommandResponse.success_response(context_data=context_data)
 
         # Forecast
