@@ -3,7 +3,7 @@ display_name: "Weather (Open-Meteo)"
 description: "Current weather conditions and forecasts up to 16 days via Open-Meteo. Free, no API key required. Supports city lookup, IP-based location fallback, and configurable units."
 version: "1.0.0"
 min_jarvis_version: "0.9.0"
-license: "MIT"
+license: Apache-2.0
 author:
   github: "alexberardi"
 categories: ["information", "weather"]
