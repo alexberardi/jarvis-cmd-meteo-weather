@@ -1,6 +1,7 @@
 """Weather command using Open-Meteo API — free, no API key required."""
 
 import datetime
+import re
 from typing import Any
 
 import httpx
@@ -231,6 +232,38 @@ def _geocode(city: str) -> tuple[float, float, str]:
     return hit["latitude"], hit["longitude"], display
 
 
+# A request that names a particular day we cannot resolve from a relative word.
+_NAMED_DAY_RE = re.compile(
+    r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekend|"
+    r"january|february|march|april|june|july|august|september|october|november|december|"
+    r"yesterday|last|ago)\b|\bnext (?:week|month)\b"
+)
+
+
+def _spoken_day_offset(voice_command: str | None) -> int | None:
+    """Days from today the request means, or None when it names a different day we cannot resolve.
+
+    "day after tomorrow" -> 2, "tomorrow" -> 1. A request that names no day at all
+    ("what's the weather", "is it raining") means today -> 0. A weekday, a month, "yesterday"
+    and similar return None: the caller must not guess those.
+    """
+    text = (voice_command or "").lower()
+    if "day after tomorrow" in text:
+        return 2
+    if "tomorrow" in text:
+        return 1
+    if _NAMED_DAY_RE.search(text):
+        return None
+    return 0
+
+
+# Words that mean a place inside the home rather than a city.
+_ROOM_WORD_RE = re.compile(
+    r"\b(?:room|bedroom|lounge|living|kitchen|theatre|theater|study|garage|bathroom|ensuite|office|"
+    r"hallway|laundry|dining|patio|pantry|house|home|fridge|freezer|pool)\b"
+)
+
+
 class OpenMeteoWeatherCommand(IJarvisCommand):
     """Weather via Open-Meteo — free, no API key required."""
 
@@ -447,6 +480,11 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
         location = match.group("location").strip()
         if not location:
             return None
+        # "what's the temperature in the theatre" names a room of the house, not a city. Geocoding it
+        # lands on an unrelated place, so decline the fast path and let the model route it (for example
+        # to a smart-home status command).
+        if _ROOM_WORD_RE.search(location.lower()):
+            return None
         return PreRouteResult(arguments={
             "city": location,
             "resolved_datetimes": [self._iso_date_for_offset(0)],
@@ -533,6 +571,17 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
             target_dates = [datetime.date.today()]
 
         today = datetime.date.today()
+
+        # The model sometimes passes a literal date from long ago ("2026-01-08") instead of the
+        # relative key. A past date can never be a forecast request, so the person got "the
+        # forecast doesn't go that far" for "what's the weather today". Use the day the person
+        # asked for; if they named a day we cannot resolve (a weekday, a month), leave the dates
+        # alone and let the existing error explain.
+        if any(d < today for d in target_dates):
+            offset = _spoken_day_offset(request_info.voice_command)
+            if offset is not None:
+                target_dates = [today + datetime.timedelta(days=offset)]
+
         is_current = len(target_dates) == 1 and target_dates[0] == today
 
         # Build API request
