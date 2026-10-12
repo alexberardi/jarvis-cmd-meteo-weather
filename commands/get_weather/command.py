@@ -1,6 +1,7 @@
 """Weather command using Open-Meteo API — free, no API key required."""
 
 import datetime
+import re
 from typing import Any
 
 import httpx
@@ -229,6 +230,31 @@ def _geocode(city: str) -> tuple[float, float, str]:
     country = hit.get("country_code", "")
     display = ", ".join(filter(None, [name, admin, country]))
     return hit["latitude"], hit["longitude"], display
+
+
+# A request that names a particular day we cannot resolve from a relative word.
+_NAMED_DAY_RE = re.compile(
+    r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekend|"
+    r"january|february|march|april|june|july|august|september|october|november|december|"
+    r"yesterday|last|ago)\b|\bnext (?:week|month)\b"
+)
+
+
+def _spoken_day_offset(voice_command: str | None) -> int | None:
+    """Days from today the request means, or None when it names a different day we cannot resolve.
+
+    "day after tomorrow" -> 2, "tomorrow" -> 1. A request that names no day at all
+    ("what's the weather", "is it raining") means today -> 0. A weekday, a month, "yesterday"
+    and similar return None: the caller must not guess those.
+    """
+    text = (voice_command or "").lower()
+    if "day after tomorrow" in text:
+        return 2
+    if "tomorrow" in text:
+        return 1
+    if _NAMED_DAY_RE.search(text):
+        return None
+    return 0
 
 
 class OpenMeteoWeatherCommand(IJarvisCommand):
@@ -533,6 +559,17 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
             target_dates = [datetime.date.today()]
 
         today = datetime.date.today()
+
+        # The model sometimes passes a literal date from long ago ("2026-01-08") instead of the
+        # relative key. A past date can never be a forecast request, so the person got "the
+        # forecast doesn't go that far" for "what's the weather today". Use the day the person
+        # asked for; if they named a day we cannot resolve (a weekday, a month), leave the dates
+        # alone and let the existing error explain.
+        if any(d < today for d in target_dates):
+            offset = _spoken_day_offset(request_info.voice_command)
+            if offset is not None:
+                target_dates = [today + datetime.timedelta(days=offset)]
+
         is_current = len(target_dates) == 1 and target_dates[0] == today
 
         # Build API request
