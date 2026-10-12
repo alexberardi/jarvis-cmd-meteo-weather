@@ -257,6 +257,13 @@ def _spoken_day_offset(voice_command: str | None) -> int | None:
     return 0
 
 
+# Words that mean a place inside the home rather than a city.
+_ROOM_WORD_RE = re.compile(
+    r"\b(?:room|bedroom|lounge|living|kitchen|theatre|theater|study|garage|bathroom|ensuite|office|"
+    r"hallway|laundry|dining|patio|pantry|house|home|fridge|freezer|pool)\b"
+)
+
+
 class OpenMeteoWeatherCommand(IJarvisCommand):
     """Weather via Open-Meteo — free, no API key required."""
 
@@ -472,6 +479,11 @@ class OpenMeteoWeatherCommand(IJarvisCommand):
     def _fp_weather_in_location(self, match, voice_command: str) -> PreRouteResult | None:
         location = match.group("location").strip()
         if not location:
+            return None
+        # "what's the temperature in the theatre" names a room of the house, not a city. Geocoding it
+        # lands on an unrelated place, so decline the fast path and let the model route it (for example
+        # to a smart-home status command).
+        if _ROOM_WORD_RE.search(location.lower()):
             return None
         return PreRouteResult(arguments={
             "city": location,
